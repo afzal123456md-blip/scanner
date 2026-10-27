@@ -1,0 +1,59 @@
+name: scanner
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = test connections, once = full scan"
+        default: "check"
+
+concurrency:
+  group: scanner
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore saved state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Run scanner
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CAPITAL_INR: "34733"
+          TARGET_INR: "100000"
+          USDT_INR: "90"
+          LEVERAGE: "5"
+          MIN_SCORE: "70"
+          FEE_IN: "0.0005"
+          FEE_OUT: "0.0005"
+          QTY_STEPS: "BTC:0.001,ETH:0.01,SOL:0.1"
+          UNFILLED_EXPIRY_H: "6"
+          MODE: ${{ github.event.inputs.mode || 'once' }}
+        run: |
+          if [ "$MODE" = "check" ]; then python bot.py --check; else python bot.py --once; fi
+
+      - name: Save state
+        if: always() && hashFiles('state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
