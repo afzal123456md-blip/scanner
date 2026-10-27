@@ -40,7 +40,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CAPITAL_INR: "34733"
           TARGET_INR: "100000"
-          USDT_INR: "90"
+          USDT_INR: "101"
           LEVERAGE: "5"
           MIN_SCORE: "70"
           FEE_IN: "0.0005"
