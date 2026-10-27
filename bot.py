@@ -217,15 +217,19 @@ class Bot:
         why = S.gate(now, self.cfg, events)
         if why:
             print(f"[{now:%H:%M}] gate: {why}")
+            self.scan_note = f"standing aside - {why}"
             return
         d = self.state.d
         if d["paused"]:
+            self.scan_note = "scanner is PAUSED (/resume to restart)"
             return
         if self.state.open_trade()[0]:
             print(f"[{now:%H:%M}] trade open - scanner idle (max 1 open trade)")
+            self.scan_note = "trade open - new scans idle (max 1 open trade); monitoring it"
             return
         if time.time() < d.get("cooldown_until", 0):
             print(f"[{now:%H:%M}] post-loss cooldown active (no revenge trading)")
+            self.scan_note = "post-loss cooldown active (no revenge trading)"
             return
         # expire stale alerts
         for tid, t in d["trades"].items():
@@ -238,6 +242,7 @@ class Bot:
             except Exception as e:
                 print("ref fetch failed", key, e)
         found = []
+        reasons = {}
         self.last_scan_ok = 0
         for sym in self.symbols:
             try:
@@ -251,12 +256,19 @@ class Bot:
                 coin = sym.split("-")[1].split("_")[0]
                 s, reason = S.evaluate(sym, d15, d1h, d4h, refs, now, self.cfg, events)
                 self.last_scan_ok += 1
+                if reason != "ok":
+                    key = reason.split(" (")[0][:45]
+                    reasons[key] = reasons.get(key, 0) + 1
                 print(f"[{now:%H:%M}] {coin}: {reason}" + (f" score {s.score}" if s else ""))
                 if s and not self.recently_alerted(s):
                     found.append(s)
             except Exception as e:
                 print("scan error", sym, e)
             time.sleep(0.3)
+        top = sorted(((v, k) for k, v in reasons.items()), reverse=True)[:2]
+        blockers = "; ".join(f"{k} x{v}" for v, k in top)
+        self.scan_note = (f"scanned {self.last_scan_ok}/{len(self.symbols)} pairs, {len(found)} setup(s) found"
+                          + (f". Main blockers: {blockers}" if blockers else ""))
         if not found:
             return
         found = S.rank_setups(found)[: self.max_alerts]
@@ -398,6 +410,7 @@ class Bot:
         self.state.save()
         if not d.get("announced"):
             d["announced"] = True
+            d["last_heartbeat"] = time.time()
             self.state.save()
             self.tg.send("Scanner online (scheduled mode: replies and alerts can lag a few minutes). "
                          "Send /help for commands.\n\n" + self.dash())
@@ -407,6 +420,7 @@ class Bot:
             except Exception as e:
                 self.tg.send(f"Command error: {e}")
         self.last_scan_ok = None
+        self.scan_note = "no scan this run"
         self.scan()
         if self.last_scan_ok == 0 and time.time() - d.get("last_error_ts", 0) > 3600:
             d["last_error_ts"] = time.time()
@@ -414,6 +428,22 @@ class Bot:
             self.tg.send("WARNING: could not load CoinDCX candles for any pair. The host may be blocked or CoinDCX is down. "
                          "Run the workflow in 'check' mode and read the log. No alerts can be produced until this is fixed.")
         self.monitor()
+        self.heartbeat()
+
+    def heartbeat(self):
+        """'Bot alive' message about every HEARTBEAT_MIN minutes (default 60; 0 = off)."""
+        d = self.state.d
+        hb_min = float(os.environ.get("HEARTBEAT_MIN", 60))
+        if hb_min <= 0 or time.time() - d.get("last_heartbeat", 0) < hb_min * 60 * 0.92:
+            return
+        d["last_heartbeat"] = time.time()
+        self.state.save()
+        cur, ini, tgt = d["current_inr"], d["initial_inr"], d["target_inr"]
+        prog = (cur - ini) / (tgt - ini) * 100 if tgt > ini else 0.0
+        self.tg.send(f"✅ Bot alive | {self.now():%a %d %b, %H:%M} IST\n"
+                     f"Scan: {getattr(self, 'scan_note', 'n/a')}\n"
+                     f"Trade status: {self.state.status_text()}\n"
+                     f"Account: {S.inr(cur)} ({(cur - ini) / ini * 100:+.2f}%) | Target progress: {prog:.2f}%")
 
     # ---- main loop
     def run(self):
